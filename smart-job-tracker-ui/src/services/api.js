@@ -265,4 +265,50 @@ export const aiJobSearch = async (requestDto) => {
   };
 };
 
+// ── Claude AI Job Search ──────────────────────────────────────────────────────
+export const claudeJobSearch = async (requestDto) => {
+  const response = await api.post('/claudejobsearch', requestDto, { timeout: 120000 });
+  const data = response.data;
+
+  const jobs = (data.jobs || []).map((j) => ({
+    id: j.id,
+    title: j.title,
+    company: j.company,
+    companyLogo: j.companyLogo,
+    location: j.location,
+    experience: j.experience,
+    salary: j.salary,
+    salaryMin: j.salaryMin,
+    salaryMax: j.salaryMax,
+    currency: j.currency,
+    matchPercent: j.matchPercent,
+    matchAnalysis: j.matchAnalysis,
+    visaSponsorshipChance: j.visaSponsorshipChance,
+    sponsorshipScore: j.sponsorshipScore,
+    applyUrl: j.applyUrl,
+    source: j.source,
+    sourcePriority: j.sourcePriority,
+    isTrustedAgency: j.isTrustedAgency,
+    isEasyApply: j.isEasyApply,
+    postedDate: j.postedDate,
+    skills: j.skills || [],
+    jobType: j.jobType,
+    description: j.description,
+    tailoredResumeSummary: j.tailoredResumeSummary,
+    recruiterMessage: j.recruiterMessage,
+    coverNote: j.coverNote,
+  }));
+
+  return {
+    jobs,
+    totalFound: data.totalFound,
+    totalSearched: data.totalSearched,
+    sourcesUsed: data.sourcesUsed || [],
+    generatedAt: data.generatedAt,
+    searchSummary: data.searchSummary,
+    model: data.model,
+    generatedQueries: data.generatedQueries || [],
+  };
+};
+
 export default api;

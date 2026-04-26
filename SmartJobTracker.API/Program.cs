@@ -20,6 +20,7 @@ builder.Services.AddScoped<IResumeParserService, ResumeParserService>();
 builder.Services.AddScoped<IJobMatchingService, JobMatchingService>();
 builder.Services.AddScoped<IJobSearchService, JobSearchService>();
 builder.Services.AddScoped<IAIJobSearchService, AIJobSearchService>();
+builder.Services.AddScoped<IClaudeJobSearchService, ClaudeJobSearchService>();
 
 // External job aggregation (Adzuna + LinkedIn + Naukri + JSearch + NodeFlair)
 builder.Services.AddHttpClient<AdzunaService>(client =>
@@ -41,6 +42,11 @@ builder.Services.AddHttpClient<NaukriJobsService>(client =>
 builder.Services.AddHttpClient<IExternalJobService, ExternalJobService>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(50);
+});
+builder.Services.AddHttpClient("AnthropicClient", client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(120); // Claude API calls can take time
+    client.BaseAddress = new Uri("https://api.anthropic.com");
 });
 
 // ── JWT Authentication ────────────────────────────────────────────────────────

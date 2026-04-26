@@ -4,15 +4,18 @@ using SmartJobTracker.API.DTOs;
 namespace SmartJobTracker.API.Services
 {
     /// <summary>
-    /// Fetches real-time LinkedIn job listings via the linkedin-job-search-api RapidAPI.
+    /// Fetches real-time LinkedIn job listings via the linkedin-jobs-api2 RapidAPI.
     ///
-    /// API: https://rapidapi.com/search/linkedin-job-search-api
-    /// Host: linkedin-job-search-api.p.rapidapi.com
+    /// API:  https://rapidapi.com/jaypat87/api/linkedin-jobs-api2
+    /// Host: linkedin-jobs-api2.p.rapidapi.com
     /// Key config: "LinkedIn:ApiKey" in appsettings.json
     ///
-    /// Endpoints used:
-    ///   GET /active-jb-7d   — jobs posted in the last 7 days
-    ///   GET /active-jb-24h  — fallback (last 24 hours)
+    /// Endpoints tried in order (most results → fewest):
+    ///   GET /active-jb-7d   — jobs posted in the last 7 days  (primary)
+    ///   GET /active-jb-24h  — last 24 hours  (fallback)
+    ///   GET /active-jb-1h   — last 1 hour    (last-resort fallback)
+    ///
+    /// Query params: title, location, country, limit, offset, description_type
     /// </summary>
     public class LinkedInJobsService
     {
@@ -20,7 +23,7 @@ namespace SmartJobTracker.API.Services
         private readonly IConfiguration _config;
         private readonly ILogger<LinkedInJobsService> _logger;
 
-        private const string RapidApiHost = "linkedin-job-search-api.p.rapidapi.com";
+        private const string RapidApiHost = "linkedin-jobs-api2.p.rapidapi.com";
 
         private static readonly string[] TechSkills = {
             "C#", ".NET", "ASP.NET", "Angular", "React", "Vue", "TypeScript", "JavaScript",
@@ -63,8 +66,8 @@ namespace SmartJobTracker.API.Services
                 ? searchCountry
                 : $"{searchLocation}, {searchCountry}";
 
-            // Try 7-day endpoint first (more results), then 24-hour fallback
-            foreach (var endpoint in new[] { "active-jb-7d", "active-jb-24h" })
+            // Try longest window first (most results), fall back to shorter windows
+            foreach (var endpoint in new[] { "active-jb-7d", "active-jb-24h", "active-jb-1h" })
             {
                 try
                 {
@@ -150,41 +153,69 @@ namespace SmartJobTracker.API.Services
                          ?? GetString(item, "jobTitle");
                 if (string.IsNullOrWhiteSpace(title)) return null;
 
-                var company = GetString(item, "company")
+                // linkedin-jobs-api2 uses "organization" for company name
+                var company = GetString(item, "organization")
+                           ?? GetString(item, "company")
                            ?? GetString(item, "company_name")
                            ?? GetString(item, "companyName")
                            ?? "Unknown Company";
 
                 var applyUrl = GetString(item, "url")
+                            ?? GetString(item, "linkedin_url")
                             ?? GetString(item, "job_url")
                             ?? GetString(item, "jobUrl")
-                            ?? GetString(item, "linkedin_url")
                             ?? GetString(item, "apply_url")
                             ?? "";
                 if (string.IsNullOrWhiteSpace(applyUrl)) return null;
 
-                var description = GetString(item, "description")
+                // linkedin-jobs-api2 uses "description_text" or "description_html"
+                var description = GetString(item, "description_text")
+                               ?? GetString(item, "description")
                                ?? GetString(item, "job_description")
                                ?? "";
 
-                var location = GetString(item, "location")
+                // Location: may be string or array in "locations_raw"
+                string location = searchCountry;
+                if (item.TryGetProperty("locations_raw", out var locArr) &&
+                    locArr.ValueKind == JsonValueKind.Array &&
+                    locArr.GetArrayLength() > 0)
+                {
+                    var firstLoc = locArr.EnumerateArray().FirstOrDefault();
+                    if (firstLoc.ValueKind == JsonValueKind.String)
+                        location = firstLoc.GetString() ?? searchCountry;
+                    else if (firstLoc.TryGetProperty("name", out var locName))
+                        location = locName.GetString() ?? searchCountry;
+                }
+                else
+                {
+                    location = GetString(item, "location")
                             ?? GetString(item, "job_location")
                             ?? searchCountry;
+                }
 
-                // Salary fields
-                decimal? salaryMin = GetDecimal(item, "salary_min") ?? GetDecimal(item, "min_salary");
-                decimal? salaryMax = GetDecimal(item, "salary_max") ?? GetDecimal(item, "max_salary");
+                // Salary — linkedin-jobs-api2 nests it as { "salary": { "min_value": x, "max_value": y, "currency": "SGD" } }
+                decimal? salaryMin = null, salaryMax = null;
+                if (item.TryGetProperty("salary", out var salaryEl) && salaryEl.ValueKind == JsonValueKind.Object)
+                {
+                    salaryMin = GetDecimal(salaryEl, "min_value") ?? GetDecimal(salaryEl, "minimum");
+                    salaryMax = GetDecimal(salaryEl, "max_value") ?? GetDecimal(salaryEl, "maximum");
+                }
                 if (!salaryMin.HasValue)
                 {
-                    var salStr = GetString(item, "salary") ?? GetString(item, "salary_range") ?? "";
+                    salaryMin = GetDecimal(item, "salary_min") ?? GetDecimal(item, "min_salary");
+                    salaryMax = GetDecimal(item, "salary_max") ?? GetDecimal(item, "max_salary");
+                }
+                if (!salaryMin.HasValue)
+                {
+                    var salStr = GetString(item, "salary_range") ?? "";
                     if (!string.IsNullOrWhiteSpace(salStr))
                         ParseSalaryString(salStr, out salaryMin, out salaryMax);
                 }
 
-                // Posted date
+                // Posted date — linkedin-jobs-api2 uses "date_posted" (ISO string)
                 DateTime? postedDate = null;
-                var dateStr = GetString(item, "posted_at")
-                           ?? GetString(item, "date_posted")
+                var dateStr = GetString(item, "date_posted")
+                           ?? GetString(item, "posted_at")
                            ?? GetString(item, "postedAt")
                            ?? GetString(item, "date");
                 if (!string.IsNullOrWhiteSpace(dateStr))
@@ -218,16 +249,28 @@ namespace SmartJobTracker.API.Services
                     _                            => "USD"
                 };
 
+                // employment_type may be a string or ["FULL_TIME"] array
+                var jobType = "Full-time";
+                if (item.TryGetProperty("employment_type", out var empEl))
+                {
+                    if (empEl.ValueKind == JsonValueKind.Array && empEl.GetArrayLength() > 0)
+                    {
+                        var raw = empEl.EnumerateArray().First().GetString() ?? "";
+                        jobType = raw switch { "FULL_TIME" => "Full-time", "PART_TIME" => "Part-time",
+                                              "CONTRACT" => "Contract", "INTERN" => "Internship", _ => raw };
+                    }
+                    else if (empEl.ValueKind == JsonValueKind.String)
+                        jobType = empEl.GetString() ?? "Full-time";
+                }
+
                 return new ExternalJobDto
                 {
                     Id          = $"li_{id}",
                     Title       = title,
                     Company     = company,
-                    CompanyLogo = GetString(item, "company_logo") ?? GetString(item, "logo"),
+                    CompanyLogo = GetString(item, "organization_logo") ?? GetString(item, "company_logo") ?? GetString(item, "logo"),
                     Location    = location,
-                    JobType     = GetString(item, "employment_type")
-                               ?? GetString(item, "job_type")
-                               ?? "Full-time",
+                    JobType     = jobType,
                     Description = description.Length > 600 ? description[..600] + "…" : description,
                     SalaryMin   = salaryMin,
                     SalaryMax   = salaryMax,

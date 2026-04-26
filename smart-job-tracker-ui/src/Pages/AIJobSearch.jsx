@@ -3,11 +3,11 @@ import {
   Bot, Search, ChevronDown, ChevronUp, ExternalLink, Building2,
   CheckCircle, Clock, Sparkles, FileText, MessageSquare, Mail,
   Globe, AlertCircle, Star, Shield, Users, TrendingUp, Zap,
-  Bookmark, BookmarkCheck, Filter, RefreshCw, SlidersHorizontal
+  Bookmark, BookmarkCheck, Filter, RefreshCw, SlidersHorizontal, Brain, Cpu
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
-  aiJobSearch, trackExternalApplication, getExternalApplications,
+  aiJobSearch, claudeJobSearch, trackExternalApplication, getExternalApplications,
   getProfile, saveExternalJob, getExternalSavedJobs, removeExternalSavedJob
 } from '../services/api';
 
@@ -157,15 +157,71 @@ function LoadingPanel({ step, roles }) {
   );
 }
 
+// ── Claude Loading Panel ───────────────────────────────────────────────────────
+
+function ClaudeLoadingPanel({ step, roles }) {
+  const primaryRole = (roles && roles.length > 0) ? roles[0] : 'Software Engineer';
+  const steps = [
+    `Sending candidate profile to Claude ${String.fromCodePoint(0x1F916)}…`,
+    `Claude generating optimised search queries for ${primaryRole}…`,
+    `Running queries against LinkedIn · Indeed · Adzuna · JobStreet…`,
+    `Claude analysing job-fit and scoring each listing (0–100)…`,
+    `Claude writing personalised cover notes & recruiter messages…`,
+  ];
+
+  return (
+    <div className="bg-white rounded-2xl border border-purple-200 p-8 max-w-lg mx-auto shadow-md">
+      <div className="flex items-center gap-3 mb-6">
+        <div className="bg-purple-100 p-3 rounded-full">
+          <Brain size={24} className="text-purple-600 animate-pulse" />
+        </div>
+        <div>
+          <h3 className="font-bold text-slate-800">Claude AI is working…</h3>
+          <p className="text-sm text-slate-500">Powered by Anthropic — this may take 30–60 seconds</p>
+        </div>
+      </div>
+      <div className="space-y-1">
+        {steps.map((s, i) => (
+          <div
+            key={i}
+            className={`flex items-center gap-2 text-sm py-1.5 transition-all ${
+              i < step ? 'text-purple-600' : i === step ? 'text-purple-800 font-medium' : 'text-slate-400'
+            }`}
+          >
+            {i < step ? (
+              <CheckCircle size={16} className="text-purple-500 flex-shrink-0" />
+            ) : i === step ? (
+              <div className="w-4 h-4 border-2 border-purple-600 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+            ) : (
+              <div className="w-4 h-4 rounded-full border-2 border-slate-300 flex-shrink-0" />
+            )}
+            {s}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── AI Content Panel ───────────────────────────────────────────────────────────
 
-function AIContentPanel({ job }) {
+function AIContentPanel({ job, isClaudeMode }) {
   const copyText = (text, label) => {
     navigator.clipboard.writeText(text).then(() => toast.success(`${label} copied!`));
   };
 
   return (
-    <div className="bg-slate-50 border-t border-slate-100 p-4 grid md:grid-cols-3 gap-4">
+    <div className="bg-slate-50 border-t border-slate-100 p-4 space-y-3">
+      {/* Claude match analysis banner */}
+      {isClaudeMode && job.matchAnalysis && (
+        <div className="bg-purple-50 border border-purple-100 rounded-xl p-3 flex gap-2">
+          <Brain size={15} className="text-purple-500 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-purple-800 leading-relaxed">
+            <span className="font-semibold">Claude's analysis: </span>{job.matchAnalysis}
+          </p>
+        </div>
+      )}
+    <div className="grid md:grid-cols-3 gap-4">
       <div className="bg-white rounded-xl p-4 border border-slate-200">
         <div className="flex items-center gap-2 mb-2 text-blue-700">
           <FileText size={15} />
@@ -193,12 +249,13 @@ function AIContentPanel({ job }) {
         <button onClick={() => copyText(job.coverNote, 'Cover note')} className="mt-2 text-xs text-emerald-600 hover:underline">Copy</button>
       </div>
     </div>
+    </div>
   );
 }
 
 // ── Job Row ────────────────────────────────────────────────────────────────────
 
-function JobRow({ job, index, expanded, onToggle, isApplied, onApply, applying, isSaved, onSave, saving }) {
+function JobRow({ job, index, expanded, onToggle, isApplied, onApply, applying, isSaved, onSave, saving, isClaudeMode }) {
   return (
     <div className={`border rounded-xl overflow-hidden mb-3 bg-white hover:shadow-md transition-shadow ${isApplied ? 'border-green-300' : isSaved ? 'border-blue-300' : 'border-slate-200'}`}>
       <div className="grid grid-cols-12 gap-2 items-center p-4 cursor-pointer" onClick={onToggle}>
@@ -281,7 +338,7 @@ function JobRow({ job, index, expanded, onToggle, isApplied, onApply, applying, 
         </div>
       </div>
 
-      {expanded && <AIContentPanel job={job} />}
+      {expanded && <AIContentPanel job={job} isClaudeMode={isClaudeMode} />}
     </div>
   );
 }
@@ -444,10 +501,23 @@ export default function AIJobSearch() {
   const initRan = useRef(false); // guard against React StrictMode double-invoke
   const [profile, setProfile] = useState(null); // null = not yet loaded
   const [editMode, setEditMode] = useState(false);
+
+  // ── Search mode: 'standard' | 'ai-powered' ─────────────────────────────────
+  const [searchMode, setSearchMode] = useState('standard');
+
+  // ── Standard search state ──────────────────────────────────────────────────
   const [loading, setLoading] = useState(false);
   const [loadStep, setLoadStep] = useState(0);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+
+  // ── Claude AI search state ─────────────────────────────────────────────────
+  const [claudeLoading, setClaudeLoading] = useState(false);
+  const [claudeLoadStep, setClaudeLoadStep] = useState(0);
+  const [claudeResult, setClaudeResult] = useState(null);
+  const [claudeError, setClaudeError] = useState(null);
+  const [claudeDisplayedJobs, setClaudeDisplayedJobs] = useState([]);
+
   const [expandedId, setExpandedId] = useState(null);
   const [activeTab, setActiveTab] = useState('jobs');
   const [appliedKeys, setAppliedKeys] = useState(new Set()); // "title_company" set
@@ -564,6 +634,59 @@ export default function AIJobSearch() {
     }
   }, [profile, filters]);
 
+  // ── Claude AI Search ─────────────────────────────────────────────────────────
+  const runClaudeSearch = useCallback(async (prof, filt) => {
+    const searchProfile = prof || profile;
+    const searchFilters = filt || filters;
+    if (!searchProfile) return;
+
+    setClaudeLoading(true);
+    setClaudeError(null);
+    setClaudeResult(null);
+    setClaudeLoadStep(0);
+
+    const stepTimers = [1000, 3000, 6000, 10000, 14000].map((ms, i) =>
+      setTimeout(() => setClaudeLoadStep(i + 1), ms)
+    );
+
+    try {
+      const data = await claudeJobSearch({
+        candidateLocation: searchProfile.candidateLocation,
+        experienceYears: searchProfile.experienceYears,
+        targetRoles: searchProfile.targetRoles,
+        coreSkills: searchProfile.coreSkills,
+        certifications: searchProfile.certifications,
+        searchCountry: searchProfile.searchCountry,
+        searchLocation: searchProfile.searchLocation,
+        maxJobs: Math.min(searchProfile.maxJobs || 15, 15),
+        postedWithinDays: searchFilters.postedWithinDays ?? 14,
+        jobPortals: searchFilters.portals || [],
+      });
+      setClaudeResult(data);
+    } catch (err) {
+      setClaudeError(
+        err?.response?.data?.message ||
+        'Claude search failed. Check your Anthropic API key in appsettings.json.'
+      );
+    } finally {
+      stepTimers.forEach(clearTimeout);
+      setClaudeLoading(false);
+    }
+  }, [profile, filters]);
+
+  // Re-filter Claude jobs when result or filters change
+  useEffect(() => {
+    if (!claudeResult) return;
+    const min = filters.minMatchPercent;
+    const portals = filters.portals;
+    let jobs = claudeResult.jobs;
+    if (min > 0) jobs = jobs.filter(j => j.matchPercent >= min);
+    if (portals.length > 0) {
+      jobs = jobs.filter(j => portals.some(p => (j.source || '').toLowerCase().includes(p.toLowerCase())));
+    }
+    setClaudeDisplayedJobs(jobs);
+  }, [claudeResult, filters.minMatchPercent, filters.portals]);
+
   const handleApply = async (job) => {
     const key = `${job.title}_${job.company}`;
     if (appliedKeys.has(key)) {
@@ -632,7 +755,8 @@ export default function AIJobSearch() {
   const handleSaveProfile = (draft) => {
     setProfile(draft);
     setEditMode(false);
-    runSearch(draft, filters);
+    if (searchMode === 'ai-powered') runClaudeSearch(draft, filters);
+    else runSearch(draft, filters);
   };
 
   const updateFilter = (key, val) => {
@@ -665,19 +789,47 @@ export default function AIJobSearch() {
       )}
 
       {/* ── Header Banner ── */}
-      <div className="bg-gradient-to-r from-blue-600 to-indigo-700 text-white rounded-2xl p-5 mb-5">
-        <div className="flex items-start justify-between">
+      <div className={`bg-gradient-to-r ${searchMode === 'ai-powered' ? 'from-purple-600 to-violet-700' : 'from-blue-600 to-indigo-700'} text-white rounded-2xl p-5 mb-5 transition-colors duration-300`}>
+        <div className="flex items-start justify-between mb-4">
           <div>
             <h2 className="text-xl font-bold mb-1 flex items-center gap-2">
-              <Bot size={22} /> AI Job Search — Real-time Multi-portal Scanner
+              {searchMode === 'ai-powered' ? <Brain size={22} /> : <Bot size={22} />}
+              {searchMode === 'ai-powered' ? 'AI-Powered Search — Claude by Anthropic' : 'Standard Search — Real-time Multi-portal Scanner'}
             </h2>
-            <p className="text-blue-100 text-sm">
-              Finds live jobs across LinkedIn · Indeed · Glassdoor · Naukri · JobStreet · Adzuna · and more
+            <p className="text-sm opacity-80">
+              {searchMode === 'ai-powered'
+                ? 'Claude generates queries · analyses job fit · writes personalised cover notes'
+                : 'Finds live jobs across LinkedIn · Indeed · Glassdoor · Naukri · JobStreet · Adzuna · and more'}
             </p>
           </div>
           <button onClick={() => setEditMode(true)}
             className="text-xs bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg transition-colors flex-shrink-0">
             Edit Profile
+          </button>
+        </div>
+
+        {/* ── Mode Switcher ── */}
+        <div className="flex gap-2 mb-4">
+          <button
+            onClick={() => setSearchMode('standard')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+              searchMode === 'standard'
+                ? 'bg-white text-blue-700 shadow-md'
+                : 'bg-white/15 text-white hover:bg-white/25'
+            }`}
+          >
+            <Search size={14} /> Standard
+          </button>
+          <button
+            onClick={() => setSearchMode('ai-powered')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+              searchMode === 'ai-powered'
+                ? 'bg-white text-purple-700 shadow-md'
+                : 'bg-white/15 text-white hover:bg-white/25'
+            }`}
+          >
+            <Brain size={14} /> AI-Powered
+            <span className="text-xs bg-amber-400 text-amber-900 px-1.5 py-0.5 rounded-full font-bold">Claude</span>
           </button>
         </div>
 
@@ -807,12 +959,12 @@ export default function AIJobSearch() {
 
             {/* Search button */}
             <button
-              onClick={() => runSearch(profile, filters)}
-              disabled={loading}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white px-5 py-2 rounded-lg font-semibold text-sm transition-colors"
+              onClick={() => searchMode === 'ai-powered' ? runClaudeSearch(profile, filters) : runSearch(profile, filters)}
+              disabled={loading || claudeLoading}
+              className={`flex items-center gap-2 ${searchMode === 'ai-powered' ? 'bg-purple-600 hover:bg-purple-700 disabled:bg-purple-400' : 'bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400'} text-white px-5 py-2 rounded-lg font-semibold text-sm transition-colors`}
             >
-              {loading ? <RefreshCw size={14} className="animate-spin" /> : <Search size={14} />}
-              {loading ? 'Searching…' : 'Search Jobs'}
+              {(loading || claudeLoading) ? <RefreshCw size={14} className="animate-spin" /> : searchMode === 'ai-powered' ? <Brain size={14} /> : <Search size={14} />}
+              {(loading || claudeLoading) ? 'Searching…' : searchMode === 'ai-powered' ? 'Ask Claude' : 'Search Jobs'}
             </button>
           </div>
 
@@ -848,160 +1000,256 @@ export default function AIJobSearch() {
       </div>
 
       {/* ── Loading ── */}
-      {loading && (
+      {(loading || claudeLoading) && (
         <div className="flex justify-center py-10">
-          <LoadingPanel step={loadStep} roles={profile.targetRoles} />
+          {searchMode === 'ai-powered'
+            ? <ClaudeLoadingPanel step={claudeLoadStep} roles={profile.targetRoles} />
+            : <LoadingPanel step={loadStep} roles={profile.targetRoles} />
+          }
         </div>
       )}
 
       {/* ── Error ── */}
-      {error && (
+      {(searchMode === 'standard' ? error : claudeError) && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-5 text-red-700 flex gap-3">
           <AlertCircle size={20} className="flex-shrink-0 mt-0.5" />
           <div>
             <p className="font-semibold">Search failed</p>
-            <p className="text-sm mt-1">{error}</p>
-            <button onClick={() => runSearch()} className="mt-2 text-sm underline">Try again</button>
+            <p className="text-sm mt-1">{searchMode === 'standard' ? error : claudeError}</p>
+            <button
+              onClick={() => searchMode === 'ai-powered' ? runClaudeSearch() : runSearch()}
+              className="mt-2 text-sm underline"
+            >
+              Try again
+            </button>
           </div>
         </div>
       )}
 
       {/* ── No result yet ── */}
-      {!loading && !result && !error && (
+      {!loading && !claudeLoading && !(searchMode === 'standard' ? result : claudeResult) && !(searchMode === 'standard' ? error : claudeError) && (
         <div className="text-center py-16">
-          <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl p-10 border border-blue-100 inline-block">
-            <Bot size={48} className="text-blue-400 mx-auto mb-4" />
-            <h3 className="text-xl font-bold text-slate-700 mb-2">Ready to find your next job</h3>
-            <p className="text-slate-500 text-sm mb-6 max-w-md">
-              Scans LinkedIn · Indeed · Glassdoor · Naukri · JobStreet · Adzuna in real-time.<br />
-              Portals change automatically based on the country you're searching.
-            </p>
-            <button
-              onClick={() => runSearch()}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-semibold flex items-center gap-2 mx-auto transition-colors"
-            >
-              <Search size={18} /> Start AI Job Search
-            </button>
-          </div>
+          {searchMode === 'ai-powered' ? (
+            <div className="bg-gradient-to-br from-purple-50 to-violet-50 rounded-2xl p-10 border border-purple-100 inline-block">
+              <Brain size={48} className="text-purple-400 mx-auto mb-4" />
+              <h3 className="text-xl font-bold text-slate-700 mb-2">Let Claude find your perfect job</h3>
+              <p className="text-slate-500 text-sm mb-2 max-w-md">
+                Claude will generate smart search queries, scan job portals, analyse every listing for fit,
+                and write personalised cover notes — all in one shot.
+              </p>
+              <p className="text-xs text-slate-400 mb-6">Takes 30–60 seconds · requires Anthropic API key in appsettings.json</p>
+              <button
+                onClick={() => runClaudeSearch()}
+                className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-3 rounded-xl font-semibold flex items-center gap-2 mx-auto transition-colors"
+              >
+                <Brain size={18} /> Ask Claude to Search
+              </button>
+            </div>
+          ) : (
+            <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl p-10 border border-blue-100 inline-block">
+              <Bot size={48} className="text-blue-400 mx-auto mb-4" />
+              <h3 className="text-xl font-bold text-slate-700 mb-2">Ready to find your next job</h3>
+              <p className="text-slate-500 text-sm mb-6 max-w-md">
+                Scans LinkedIn · Indeed · Glassdoor · Naukri · JobStreet · Adzuna in real-time.<br />
+                Portals change automatically based on the country you're searching.
+              </p>
+              <button
+                onClick={() => runSearch()}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-semibold flex items-center gap-2 mx-auto transition-colors"
+              >
+                <Search size={18} /> Start Search
+              </button>
+            </div>
+          )}
         </div>
       )}
 
-      {/* ── Results ── */}
-      {result && !loading && (
-        <div>
-          {/* Summary Bar */}
-          <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
-            <div>
-              <h2 className="text-xl font-bold text-slate-800">
-                {displayedJobs.length} Jobs Found
-                {displayedJobs.length !== result.totalFound && (
-                  <span className="text-sm font-normal text-slate-500 ml-2">
-                    (filtered from {result.totalFound})
-                  </span>
+      {/* ── Results (Standard mode) ── */}
+      {searchMode === 'standard' && result && !loading && (() => {
+        const shownJobs = displayedJobs;
+        const accentTab = 'border-blue-600 text-blue-700';
+        return (
+          <div>
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+              <div>
+                <h2 className="text-xl font-bold text-slate-800">
+                  {shownJobs.length} Jobs Found
+                  {shownJobs.length !== result.totalFound && (
+                    <span className="text-sm font-normal text-slate-500 ml-2">(filtered from {result.totalFound})</span>
+                  )}
+                </h2>
+                <p className="text-sm text-slate-500">{result.searchSummary}</p>
+                {appliedKeys.size > 0 && (
+                  <p className="text-xs text-green-700 mt-0.5 flex items-center gap-1">
+                    <CheckCircle size={12} /> {appliedKeys.size} tracked in dashboard
+                  </p>
                 )}
-              </h2>
-              <p className="text-sm text-slate-500">{result.searchSummary}</p>
-              {appliedKeys.size > 0 && (
-                <p className="text-xs text-green-700 mt-0.5 flex items-center gap-1">
-                  <CheckCircle size={12} /> {appliedKeys.size} tracked in dashboard
-                </p>
-              )}
+              </div>
+              <div className="flex gap-2 items-center flex-wrap">
+                {[...new Set(result.sourcesUsed || [])].map(s => (
+                  <span key={s} className={`text-xs px-2 py-1 rounded-full ${sourceColor(s)}`}>{s}</span>
+                ))}
+                <button onClick={() => runSearch()}
+                  className="flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+                  <RefreshCw size={13} /> Refresh
+                </button>
+              </div>
             </div>
-            <div className="flex gap-2 items-center flex-wrap">
-              {[...new Set(result.sourcesUsed || [])].map(s => (
-                <span key={s} className={`text-xs px-2 py-1 rounded-full ${sourceColor(s)}`}>{s}</span>
-              ))}
-              <button onClick={() => runSearch()}
-                className="flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-                <RefreshCw size={13} /> Refresh
+
+            <div className="flex gap-2 mb-5 border-b border-slate-200">
+              <button onClick={() => setActiveTab('jobs')}
+                className={`pb-2 px-1 text-sm font-medium border-b-2 transition-colors ${activeTab === 'jobs' ? accentTab : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                <TrendingUp size={14} className="inline mr-1" /> Job Listings ({shownJobs.length})
+              </button>
+              <button onClick={() => setActiveTab('companies')}
+                className={`pb-2 px-1 text-sm font-medium border-b-2 transition-colors ${activeTab === 'companies' ? accentTab : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                <Users size={14} className="inline mr-1" /> Companies ({result.companiesHiringFromIndia?.length || 0})
               </button>
             </div>
-          </div>
 
-          {/* Tabs */}
-          <div className="flex gap-2 mb-5 border-b border-slate-200">
-            <button
-              onClick={() => setActiveTab('jobs')}
-              className={`pb-2 px-1 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'jobs' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'
-              }`}
-            >
-              <TrendingUp size={14} className="inline mr-1" /> Job Listings ({displayedJobs.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('companies')}
-              className={`pb-2 px-1 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'companies' ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:text-slate-700'
-              }`}
-            >
-              <Users size={14} className="inline mr-1" /> Companies ({result.companiesHiringFromIndia?.length || 0})
-            </button>
-          </div>
-
-          {/* Jobs Tab */}
-          {activeTab === 'jobs' && (
-            <div>
-              {/* Column Headers */}
-              <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-slate-500 uppercase tracking-wide px-4 pb-2 border-b border-slate-100 mb-3">
-                <div className="col-span-1 text-center">#</div>
-                <div className="col-span-3">Job / Company</div>
-                <div className="col-span-1">Exp.</div>
-                <div className="col-span-2">Salary</div>
-                <div className="col-span-1 text-center">Match</div>
-                <div className="col-span-2">EP / Source</div>
-                <div className="col-span-2 text-right">Save · Apply</div>
-              </div>
-
-              {displayedJobs.length === 0 ? (
-                <div className="text-center py-10 text-slate-500">
-                  <Bot size={40} className="mx-auto mb-3 text-slate-300" />
-                  <p className="font-medium">No jobs match your current filters</p>
-                  <p className="text-sm">Try lowering the match threshold or selecting all portals.</p>
+            {activeTab === 'jobs' && (
+              <div>
+                <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-slate-500 uppercase tracking-wide px-4 pb-2 border-b border-slate-100 mb-3">
+                  <div className="col-span-1 text-center">#</div>
+                  <div className="col-span-3">Job / Company</div>
+                  <div className="col-span-1">Exp.</div>
+                  <div className="col-span-2">Salary</div>
+                  <div className="col-span-1 text-center">Match</div>
+                  <div className="col-span-2">EP / Source</div>
+                  <div className="col-span-2 text-right">Save · Apply</div>
                 </div>
-              ) : (
-                displayedJobs.map((job, i) => (
-                  <JobRow
-                    key={job.id}
-                    job={job}
-                    index={i}
+                {shownJobs.length === 0 ? (
+                  <div className="text-center py-10 text-slate-500">
+                    <Bot size={40} className="mx-auto mb-3 text-slate-300" />
+                    <p className="font-medium">No jobs match your current filters</p>
+                    <p className="text-sm">Try lowering the match threshold or selecting all portals.</p>
+                  </div>
+                ) : shownJobs.map((job, i) => (
+                  <JobRow key={job.id} job={job} index={i}
                     expanded={expandedId === job.id}
                     onToggle={() => setExpandedId(prev => prev === job.id ? null : job.id)}
                     isApplied={appliedKeys.has(`${job.title}_${job.company}`)}
-                    onApply={handleApply}
-                    applying={applyingId === job.id}
-                    isSaved={savedJobIds.has(job.id)}
-                    onSave={handleSave}
-                    saving={savingId === job.id}
+                    onApply={handleApply} applying={applyingId === job.id}
+                    isSaved={savedJobIds.has(job.id)} onSave={handleSave} saving={savingId === job.id}
+                    isClaudeMode={false}
                   />
-                ))
-              )}
+                ))}
+                {shownJobs.length > 0 && (
+                  <p className="text-center text-xs text-slate-400 mt-4">
+                    Click any row to expand AI-tailored resume summary, recruiter message &amp; cover note.
+                  </p>
+                )}
+              </div>
+            )}
 
-              {displayedJobs.length > 0 && (
-                <p className="text-center text-xs text-slate-400 mt-4">
-                  Click any row to expand AI-tailored resume summary, recruiter message & cover note.
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* Companies Tab */}
-          {activeTab === 'companies' && (
-            <div>
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-5 flex gap-3">
-                <Star size={18} className="text-amber-600 flex-shrink-0 mt-0.5" />
-                <div className="text-sm text-amber-800">
-                  <strong>These companies are known to actively hire candidates and sponsor work authorisation.</strong> Live openings matching your profile are shown where available.
+            {activeTab === 'companies' && (
+              <div>
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-5 flex gap-3">
+                  <Star size={18} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                  <div className="text-sm text-amber-800">
+                    <strong>These companies are known to actively hire candidates and sponsor work authorisation.</strong> Live openings matching your profile are shown where available.
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {(result.companiesHiringFromIndia || []).map((company, i) => (
+                    <CompanyCard key={i} company={company} />
+                  ))}
                 </div>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {(result.companiesHiringFromIndia || []).map((company, i) => (
-                  <CompanyCard key={i} company={company} />
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ── Results (AI-Powered / Claude mode) ── */}
+      {searchMode === 'ai-powered' && claudeResult && !claudeLoading && (() => {
+        const shownJobs = claudeDisplayedJobs;
+        const accentTab = 'border-purple-600 text-purple-700';
+        return (
+          <div>
+            {/* Claude metadata banner */}
+            <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 mb-4 flex flex-wrap items-center gap-3 text-xs text-purple-800">
+              <span className="flex items-center gap-1 font-semibold"><Brain size={13} /> Claude Results</span>
+              <span className="bg-purple-100 px-2 py-0.5 rounded-full">{claudeResult.model}</span>
+              {(claudeResult.generatedQueries || []).length > 0 && (
+                <span className="text-purple-600">
+                  Queries: {claudeResult.generatedQueries.slice(0, 2).map((q, i) => (
+                    <span key={i} className="italic">"{q}"{i < 1 ? ', ' : ''}</span>
+                  ))}{claudeResult.generatedQueries.length > 2 ? ` +${claudeResult.generatedQueries.length - 2} more` : ''}
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+              <div>
+                <h2 className="text-xl font-bold text-slate-800">
+                  {shownJobs.length} Jobs Found by Claude
+                  {shownJobs.length !== claudeResult.totalFound && (
+                    <span className="text-sm font-normal text-slate-500 ml-2">(filtered from {claudeResult.totalFound})</span>
+                  )}
+                </h2>
+                <p className="text-sm text-slate-500">{claudeResult.searchSummary}</p>
+                {appliedKeys.size > 0 && (
+                  <p className="text-xs text-green-700 mt-0.5 flex items-center gap-1">
+                    <CheckCircle size={12} /> {appliedKeys.size} tracked in dashboard
+                  </p>
+                )}
+              </div>
+              <div className="flex gap-2 items-center flex-wrap">
+                {[...new Set(claudeResult.sourcesUsed || [])].map(s => (
+                  <span key={s} className={`text-xs px-2 py-1 rounded-full ${sourceColor(s)}`}>{s}</span>
                 ))}
+                <button onClick={() => runClaudeSearch()}
+                  className="flex items-center gap-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+                  <RefreshCw size={13} /> Re-ask Claude
+                </button>
               </div>
             </div>
-          )}
-        </div>
-      )}
+
+            <div className="flex gap-2 mb-5 border-b border-slate-200">
+              <button onClick={() => setActiveTab('jobs')}
+                className={`pb-2 px-1 text-sm font-medium border-b-2 transition-colors ${activeTab === 'jobs' ? accentTab : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                <TrendingUp size={14} className="inline mr-1" /> Job Listings ({shownJobs.length})
+              </button>
+            </div>
+
+            {activeTab === 'jobs' && (
+              <div>
+                <div className="grid grid-cols-12 gap-2 text-xs font-semibold text-slate-500 uppercase tracking-wide px-4 pb-2 border-b border-slate-100 mb-3">
+                  <div className="col-span-1 text-center">#</div>
+                  <div className="col-span-3">Job / Company</div>
+                  <div className="col-span-1">Exp.</div>
+                  <div className="col-span-2">Salary</div>
+                  <div className="col-span-1 text-center">Match</div>
+                  <div className="col-span-2">EP / Source</div>
+                  <div className="col-span-2 text-right">Save · Apply</div>
+                </div>
+                {shownJobs.length === 0 ? (
+                  <div className="text-center py-10 text-slate-500">
+                    <Brain size={40} className="mx-auto mb-3 text-slate-300" />
+                    <p className="font-medium">No jobs match your current filters</p>
+                    <p className="text-sm">Try lowering the match threshold or clicking Re-ask Claude.</p>
+                  </div>
+                ) : shownJobs.map((job, i) => (
+                  <JobRow key={job.id} job={job} index={i}
+                    expanded={expandedId === job.id}
+                    onToggle={() => setExpandedId(prev => prev === job.id ? null : job.id)}
+                    isApplied={appliedKeys.has(`${job.title}_${job.company}`)}
+                    onApply={handleApply} applying={applyingId === job.id}
+                    isSaved={savedJobIds.has(job.id)} onSave={handleSave} saving={savingId === job.id}
+                    isClaudeMode={true}
+                  />
+                ))}
+                {shownJobs.length > 0 && (
+                  <p className="text-center text-xs text-slate-400 mt-4 flex items-center justify-center gap-1">
+                    <Brain size={12} /> Click any row to see Claude's fit analysis, personalised cover note &amp; recruiter message.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
